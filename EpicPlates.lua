@@ -73,14 +73,6 @@ function EpicPlates:OnEnable()
     end)
 end
 
-
-local LDB = LibStub("LibDataBroker-1.1")
-local LDBIcon = LibStub("LibDBIcon-1.0")
-
-
-
-
-
 local EpicPlatesLDB = LibStub("LibDataBroker-1.1"):NewDataObject("EpicPlates", {
     type = "launcher",
     text = "EpicPlates",
@@ -156,6 +148,77 @@ function EpicPlates:OnInitialize()
     self:ApplyTextureToAllNameplates()  
 end
 
+local gladiatorMedallionSpellID = 336126 
+local adaptationSpellID = 214027 
+local trinketCooldown = 120 
+
+local racialAbilities = {
+    ["Human"] = { spellID = 59752, texture = 136129, cooldown = 180 }, 
+    ["Undead"] = { spellID = 7744, texture = 136187, cooldown = 120 }, 
+    ["Gnome"] = { spellID = 20589, texture = 132309, cooldown = 60 }  
+}
+
+-- Function to detect the player's race and setup racial abilities
+local function GetRacialAbility(unit)
+    local playerRace = UnitRace(unit)
+    if racialAbilities[playerRace] then
+        return racialAbilities[playerRace]
+    end
+    return nil
+end
+
+-- Function to create and show the PvP trinket and racial ability icons
+local function ShowPvPTrinketAndRacialIcons(unit)
+    if not UnitIsPlayer(unit) or not UnitIsEnemy("player", unit) then return end
+
+    local nameplate = C_NamePlate.GetNamePlateForUnit(unit)
+    if not nameplate then return end
+    local UnitFrame = nameplate.UnitFrame
+
+    -- Create or show the trinket icon frame
+    if not UnitFrame.PvPTrinketFrame then
+        UnitFrame.PvPTrinketFrame = CreateFrame("Frame", nil, UnitFrame)
+        UnitFrame.PvPTrinketFrame:SetSize(20, 20)
+        UnitFrame.PvPTrinketFrame:SetPoint("RIGHT", UnitFrame, "RIGHT", 30, 0)
+
+        -- Create the cooldown overlay for the trinket
+        UnitFrame.TrinketCooldownOverlay = CreateFrame("Cooldown", nil, UnitFrame.PvPTrinketFrame, "CooldownFrameTemplate")
+        UnitFrame.TrinketCooldownOverlay:SetAllPoints(UnitFrame.PvPTrinketFrame)
+    end
+
+    local trinketTexture = UnitFrame.PvPTrinketFrame:CreateTexture(nil, "OVERLAY")
+    trinketTexture:SetAllPoints(UnitFrame.PvPTrinketFrame)
+    trinketTexture:SetTexture(1322720) 
+
+    local racialAbility = GetRacialAbility(unit)
+    if racialAbility then
+        if not UnitFrame.RacialIconFrame then
+            UnitFrame.RacialIconFrame = CreateFrame("Frame", nil, UnitFrame)
+            UnitFrame.RacialIconFrame:SetSize(20, 20)
+            UnitFrame.RacialIconFrame:SetPoint("LEFT", UnitFrame.PvPTrinketFrame, "RIGHT", 2, 0)
+        end
+        local racialTexture = UnitFrame.RacialIconFrame:CreateTexture(nil, "OVERLAY")
+        racialTexture:SetAllPoints(UnitFrame.RacialIconFrame)
+        racialTexture:SetTexture(racialAbility.texture)
+        UnitFrame.RacialIconFrame:Show()
+    end
+
+    UnitFrame.PvPTrinketFrame:Show()
+end
+
+-- Function to hide the trinket and racial ability icons
+local function HidePvPTrinketAndRacialIcons(unit)
+    local nameplate = C_NamePlate.GetNamePlateForUnit(unit)
+    if nameplate and nameplate.UnitFrame then
+        if nameplate.UnitFrame.PvPTrinketFrame then
+            nameplate.UnitFrame.PvPTrinketFrame:Hide()
+        end
+        if nameplate.UnitFrame.RacialIconFrame then
+            nameplate.UnitFrame.RacialIconFrame:Hide()
+        end
+    end
+end
+
 function EpicPlates:ApplyTextureToAllNameplates()
     local texture = LSM:Fetch("statusbar", self.db.profile.healthBarTexture)
     for _, nameplate in pairs(C_NamePlate.GetNamePlates()) do
@@ -202,35 +265,26 @@ function EpicPlates:NAME_PLATE_CREATED(_, frame)
 end
 
 function EpicPlates:NAME_PLATE_UNIT_ADDED(_, unit)
-    -- Existing nameplate handling
     local nameplate = C_NamePlate.GetNamePlateForUnit(unit)
     if nameplate and nameplate.UnitFrame then
-        -- Existing updates: nameplate info, health bar texture, etc.
         self:NiceNameplateInfo_Update(unit)
         self:NiceNameplateFrames_Update(unit)
         local texture = LSM:Fetch("statusbar", self.db.profile.healthBarTexture)
         nameplate.UnitFrame.healthBar:SetStatusBarTexture(texture)
-        self:UpdateHealthBarWithPercent(unit)  -- Health percentage display
-
-        -- New: PvP trinket and racial icon display for enemy players
-        ShowPvPTrinketAndRacialIcons(unit)  -- Only enemy players get PvP trinket and racial icons
+        self:UpdateHealthBarWithPercent(unit)  
+		ShowPvPTrinketAndRacialIcons(unit)
     end
 end
-
 
 function EpicPlates:NAME_PLATE_UNIT_REMOVED(_, unit)
     local nameplate = C_NamePlate.GetNamePlateForUnit(unit)
     if nameplate and nameplate.UnitFrame then
-        -- Existing nameplate removal logic
         self:NiceNameplateInfo_Update(unit)
         self:NiceNameplateFrames_Update(unit)
-        self:UpdateHealthBarWithPercent(unit)
-
-        -- New: Hide PvP trinket and racial icons when the nameplate is removed
-        HidePvPTrinketAndRacialIcons(unit)
+        self:UpdateHealthBarWithPercent(unit) 
+		ShowPvPTrinketAndRacialIcons(unit)
     end
 end
-
 
 function EpicPlates:UNIT_THREAT_LIST_UPDATE(_, unit)
     if unit and unit:match('nameplate') then
@@ -1025,104 +1079,35 @@ function EpicPlates:OnCombatLogEventUnfiltered()
     local timestamp, eventType, hideCaster, sourceGUID, sourceName, sourceFlags, sourceRaidFlags,
           destGUID, destName, destFlags, destRaidFlags, spellId, spellName, spellSchool, auraType = CombatLogGetCurrentEventInfo()
 
-    -- Handle Auras (existing logic for auras)
-    if eventType == "SPELL_AURA_APPLIED" or eventType == "SPELL_AURA_REMOVED" then
-        local unit = self:GetUnitByGUID(destGUID)
-        if unit then
-            if eventType == "SPELL_AURA_APPLIED" then
-                self:HandleAuraApplied(unit, spellId, auraType)
-            elseif eventType == "SPELL_AURA_REMOVED" then
-                self:HandleAuraRemoved(unit, spellId, auraType)
-            end
-        end
-    end
-
-    -- Handle PvP Trinkets and Racial Abilities (added logic)
     if eventType == "SPELL_CAST_SUCCESS" then
-        -- Check if the spell is a PvP trinket or racial ability
-        if spellId == gladiatorMedallionSpellID or spellId == adaptationSpellID then
-            local unit = self:GetUnitByGUID(destGUID)
-            if unit then
-                ShowPvPTrinketAndRacialIcons(unit)
+        local unit = self:GetUnitByGUID(sourceGUID) 
+
+        if unit and UnitIsPlayer(unit) and UnitIsEnemy("player", unit) then
+            local nameplate = C_NamePlate.GetNamePlateForUnit(unit)
+
+            if nameplate and nameplate.UnitFrame then
+                if nameplate.UnitFrame.TrinketCooldownOverlay then
+                    if spellId == gladiatorMedallionSpellID then
+                        print("Enemy Gladiator's Medallion used!")
+                        nameplate.UnitFrame.TrinketCooldownOverlay:SetCooldown(GetTime(), trinketCooldown)
+                    elseif spellId == adaptationSpellID then
+                        print("Enemy Adaptation triggered!")
+                        nameplate.UnitFrame.TrinketCooldownOverlay:SetCooldown(GetTime(), trinketCooldown)
+                    end
+                end
+
+                local racialAbility = GetRacialAbility(unit)
+                if racialAbility and spellId == racialAbility.spellID then
+                    print("Enemy racial ability used: " .. spellId)
+                    if nameplate.UnitFrame.RacialCooldownOverlay then
+                        nameplate.UnitFrame.RacialCooldownOverlay:SetCooldown(GetTime(), racialAbility.cooldown)
+                    end
+                end
             end
         end
     end
 end
 
-local gladiatorMedallionSpellID = 336126 -- Gladiator's Medallion
-local adaptationSpellID = 214027 -- Adaptation
-local racialAbilities = {
-    ["Human"] = { spellID = 59752, texture = 136129 }, -- Every Man for Himself
-    ["Undead"] = { spellID = 7744, texture = 136187 }, -- Will of the Forsaken
-    ["Orc"] = { spellID = 33697, texture = 135726 }, -- Blood Fury
-    ["BloodElf"] = { spellID = 202719, texture = 136222 }, -- Arcane Torrent
-    ["Tauren"] = { spellID = 20549, texture = 132368 }, -- War Stomp
-    ["NightElf"] = { spellID = 58984, texture = 132089 }, -- Shadowmeld
-    ["Gnome"] = { spellID = 20589, texture = 132309 }, -- Escape Artist
-    ["Dwarf"] = { spellID = 20594, texture = 136225 } -- Stoneform
-}
-
--- Function to check if the unit is an enemy player
-local function IsEnemyPlayer(unit)
-    return UnitIsPlayer(unit) and UnitIsEnemy("player", unit)
-end
-
--- Function to show PvP trinket and racial icons on nameplates
-local function ShowPvPTrinketAndRacialIcons(unit)
-    if not IsEnemyPlayer(unit) then return end -- Only proceed for enemy players
-
-    -- Get the nameplate for the unit
-    local nameplate = C_NamePlate.GetNamePlateForUnit(unit)
-    if not nameplate then return end -- Skip if no nameplate is available
-    local UnitFrame = nameplate.UnitFrame
-
-    -- Create a base frame for PvP trinket icons if it doesn't already exist
-    if not UnitFrame.PvPTrinketFrame then
-        UnitFrame.PvPTrinketFrame = CreateFrame("Frame", nil, UnitFrame)
-        UnitFrame.PvPTrinketFrame:SetSize(32, 32)
-        UnitFrame.PvPTrinketFrame:SetPoint("RIGHT", UnitFrame, "RIGHT", 50, 0) -- Position on right side
-    end
-
-    -- Set the PvP trinket texture (Gladiator's Medallion)
-    local trinketTexture = UnitFrame.PvPTrinketFrame:CreateTexture(nil, "OVERLAY")
-    trinketTexture:SetAllPoints(UnitFrame.PvPTrinketFrame)
-    trinketTexture:SetTexture(1322720) -- Gladiator's Medallion texture
-
-    -- Show racial ability icon next to the trinket
-    local playerRace = UnitRace(unit)
-    if racialAbilities[playerRace] then
-        if not UnitFrame.RacialIconFrame then
-            UnitFrame.RacialIconFrame = CreateFrame("Frame", nil, UnitFrame)
-            UnitFrame.RacialIconFrame:SetSize(32, 32)
-            UnitFrame.RacialIconFrame:SetPoint("RIGHT", UnitFrame.PvPTrinketFrame, "RIGHT", 40, 0) -- Position to the right of the trinket
-        end
-
-        local racialTexture = UnitFrame.RacialIconFrame:CreateTexture(nil, "OVERLAY")
-        racialTexture:SetAllPoints(UnitFrame.RacialIconFrame)
-        racialTexture:SetTexture(racialAbilities[playerRace].texture) -- Use the correct racial ability texture
-    end
-
-    -- Show both frames
-    UnitFrame.PvPTrinketFrame:Show()
-    if UnitFrame.RacialIconFrame then
-        UnitFrame.RacialIconFrame:Show()
-    end
-end
-
--- Function to hide PvP trinket and racial icons
-local function HidePvPTrinketAndRacialIcons(unit)
-    local nameplate = C_NamePlate.GetNamePlateForUnit(unit)
-    if nameplate and nameplate.UnitFrame then
-        if nameplate.UnitFrame.PvPTrinketFrame then
-            nameplate.UnitFrame.PvPTrinketFrame:Hide()
-        end
-        if nameplate.UnitFrame.RacialIconFrame then
-            nameplate.UnitFrame.RacialIconFrame:Hide()
-        end
-    end
-end
-
--- Utility function to map GUID to the correct unit
 function EpicPlates:GetUnitByGUID(guid)
     local knownUnits = {"target", "focus", "mouseover", "nameplate1", "nameplate2", "nameplate3", "nameplate4", "nameplate5"}
 
