@@ -1,11 +1,12 @@
 -- Made by Sharpedge_Gaming
--- v1.1 - 11.0.2
+-- v1.2 - 11.0.2
 
 local AceConfig = LibStub("AceConfig-3.0")
 local AceConfigDialog = LibStub("AceConfigDialog-3.0")
 local LSM = LibStub("LibSharedMedia-3.0")
 local LDB = LibStub("LibDataBroker-1.1")
 local LDBIcon = LibStub("LibDBIcon-1.0")
+local LibButtonGlow = LibStub("LibButtonGlow-1.0") 
 
 local INFO_POINT            = 'TOP'
 local INFO_RELATIVE_POINT   = 'BOTTOM'
@@ -20,7 +21,7 @@ local BUFF_ICON_OFFSET_Y    = 20
 local DEBUFF_ICON_OFFSET_Y  = 10 
 local BUFFS_PER_LINE        = 6  
 local DEBUFFS_PER_LINE      = 6 
-local MAX_ROWS = 3  
+local MAX_ROWS              = 3  
 local LINE_SPACING_Y        = 9 
 
 if not EpicPlates then
@@ -39,7 +40,8 @@ EpicPlates.defaults = {
         healthPercentFontColor = {1, 1, 1}, 
         timerPosition = "BELOW",	
         iconXOffset = 0,   
-        iconYOffset = 0,		
+        iconYOffset = 0,
+        iconGlowEnabled = true,		
     },
 }
 
@@ -67,7 +69,6 @@ function EpicPlates:OnEnable()
 
     self:DisableDefaultBuffsDebuffs()
 
-    -- Delay the population of alwaysShow to ensure all Lua files are loaded
     C_Timer.After(1, function()
         self:InitializeAlwaysShow()
     end)
@@ -148,74 +149,184 @@ function EpicPlates:OnInitialize()
     self:ApplyTextureToAllNameplates()  
 end
 
-local gladiatorMedallionSpellID = 336126 
-local adaptationSpellID = 214027 
-local trinketCooldown = 120 
-
 local racialAbilities = {
-    ["Human"] = { spellID = 59752, texture = 136129, cooldown = 180 }, 
-    ["Undead"] = { spellID = 7744, texture = 136187, cooldown = 120 }, 
-    ["Gnome"] = { spellID = 20589, texture = 132309, cooldown = 60 }  
+    [59752] = true, -- Human - Every Man for Himself
+    [7744]  = true, -- Undead - Will of the Forsaken
+    [20594] = true, -- Dwarf - Stoneform
+	[58984] = true, --Shadowmeld
 }
 
--- Function to detect the player's race and setup racial abilities
-local function GetRacialAbility(unit)
-    local playerRace = UnitRace(unit)
-    if racialAbilities[playerRace] then
-        return racialAbilities[playerRace]
-    end
-    return nil
+-- Racial categories to filter relevant races
+local racialCategories = {
+    ["Human"] = true,
+    ["Scourge"] = true,
+    ["Dwarf"] = true,
+	["NightElf"] = true,
+}
+
+-- Racial data (for icons and shared cooldown logic)
+local racialData = {
+    ["Human"] = { texture = C_Spell.GetSpellTexture(59752), sharedCD = 90 },
+    ["Scourge"] = { texture = C_Spell.GetSpellTexture(7744), sharedCD = 30 },
+    ["Dwarf"] = { texture = C_Spell.GetSpellTexture(20594), sharedCD = 30 },
+	["NightElf"] = {texture = C_Spell.GetSpellTexture(58984), sharedCD = 0 },
+}
+
+-- Utility function to get the remaining cooldown time
+local function GetRemainingCD(frame)
+    local startTime, duration = frame:GetCooldownTimes()
+    if (startTime == 0) then return 0 end
+
+    local currTime = GetTime()
+    return (startTime + duration) / 1000 - currTime
 end
 
--- Function to create and show the PvP trinket and racial ability icons
-local function ShowPvPTrinketAndRacialIcons(unit)
+local function GetRacialAbility(unit)
+    local raceLocalized, race = UnitRace(unit)  
+    race = race:gsub("%s", ""):lower()  
+    
+    if racialData[race] then
+        return racialData[race]  
+    end
+
+    return nil  
+end
+
+-- Function to show racial ability icons for enemy players
+function ShowPvPRacial(unit)
     if not UnitIsPlayer(unit) or not UnitIsEnemy("player", unit) then return end
 
     local nameplate = C_NamePlate.GetNamePlateForUnit(unit)
     if not nameplate then return end
     local UnitFrame = nameplate.UnitFrame
 
-    -- Create or show the trinket icon frame
-    if not UnitFrame.PvPTrinketFrame then
-        UnitFrame.PvPTrinketFrame = CreateFrame("Frame", nil, UnitFrame)
-        UnitFrame.PvPTrinketFrame:SetSize(20, 20)
-        UnitFrame.PvPTrinketFrame:SetPoint("RIGHT", UnitFrame, "RIGHT", 30, 0)
+    if not UnitFrame then return end
 
-        -- Create the cooldown overlay for the trinket
-        UnitFrame.TrinketCooldownOverlay = CreateFrame("Cooldown", nil, UnitFrame.PvPTrinketFrame, "CooldownFrameTemplate")
-        UnitFrame.TrinketCooldownOverlay:SetAllPoints(UnitFrame.PvPTrinketFrame)
+    if not UnitFrame.PvPRacialFrame then
+        UnitFrame.PvPRacialFrame = CreateFrame("Frame", nil, UnitFrame)
+        UnitFrame.PvPRacialFrame:SetSize(22, 22) 
+        UnitFrame.PvPRacialFrame:SetPoint("RIGHT", UnitFrame, "LEFT", -2, 0)
+
+        UnitFrame.RacialCooldownOverlay = CreateFrame("Cooldown", nil, UnitFrame.PvPRacialFrame, "CooldownFrameTemplate")
+        UnitFrame.RacialCooldownOverlay:SetAllPoints(UnitFrame.PvPRacialFrame)
+
+        UnitFrame.RacialCooldownText = UnitFrame.PvPRacialFrame:CreateFontString(nil, "OVERLAY")
+        UnitFrame.RacialCooldownText:SetFont("Fonts\\FRIZQT__.TTF", 12, "THICKOUTLINE")
+        UnitFrame.RacialCooldownText:SetPoint("CENTER", UnitFrame.PvPRacialFrame, "CENTER", 0, 0)
+        UnitFrame.RacialCooldownText:SetTextColor(1, 1, 1, 1)
+        UnitFrame.RacialCooldownText:Hide()
+
+        UnitFrame.PvPRacialFrame.texture = UnitFrame.PvPRacialFrame:CreateTexture(nil, "OVERLAY")
+        UnitFrame.PvPRacialFrame.texture:SetAllPoints(UnitFrame.PvPRacialFrame)
     end
-
-    local trinketTexture = UnitFrame.PvPTrinketFrame:CreateTexture(nil, "OVERLAY")
-    trinketTexture:SetAllPoints(UnitFrame.PvPTrinketFrame)
-    trinketTexture:SetTexture(1322720) 
 
     local racialAbility = GetRacialAbility(unit)
     if racialAbility then
-        if not UnitFrame.RacialIconFrame then
-            UnitFrame.RacialIconFrame = CreateFrame("Frame", nil, UnitFrame)
-            UnitFrame.RacialIconFrame:SetSize(20, 20)
-            UnitFrame.RacialIconFrame:SetPoint("LEFT", UnitFrame.PvPTrinketFrame, "RIGHT", 2, 0)
+        UnitFrame.PvPRacialFrame.texture:SetTexture(racialAbility.texture)
+        UnitFrame.PvPRacialFrame:Show()
+
+        if not UnitFrame.PvPRacialFrame.glowApplied then
+            ActionButton_ShowOverlayGlow(UnitFrame.PvPRacialFrame) 
+            UnitFrame.PvPRacialFrame.glowApplied = true
         end
-        local racialTexture = UnitFrame.RacialIconFrame:CreateTexture(nil, "OVERLAY")
-        racialTexture:SetAllPoints(UnitFrame.RacialIconFrame)
-        racialTexture:SetTexture(racialAbility.texture)
-        UnitFrame.RacialIconFrame:Show()
+    end
+end
+
+local function HidePvPRacial(unit)
+    local nameplate = C_NamePlate.GetNamePlateForUnit(unit)
+    if nameplate and nameplate.UnitFrame and nameplate.UnitFrame.PvPRacialFrame then
+        nameplate.UnitFrame.PvPRacialFrame:Hide()
+    end
+end
+
+local gladiatorMedallionSpellID = 336126 
+local adaptationSpellID = 214027 
+local trinketCooldown = 120 
+
+local function UpdateCooldownText(UnitFrame, cooldownText, endTime)
+    if not endTime or endTime <= GetTime() then
+        cooldownText:Hide()
+        return
+    end
+
+    if UnitFrame.ticker then
+        UnitFrame.ticker:Cancel() 
+    end
+
+    UnitFrame.ticker = C_Timer.NewTicker(0.1, function()
+        local remainingTime = endTime - GetTime()
+
+        if remainingTime > 0 then
+            cooldownText:SetText(string.format("%d", math.ceil(remainingTime)))
+            cooldownText:Show()
+            cooldownText:SetTextColor(1, 1, 1, 1)  
+        else
+            cooldownText:Hide()
+            UnitFrame.ticker:Cancel()
+        end
+    end)
+end
+
+-- Function to handle Gladiator trinket icons and ensure they always show
+local function ShowPvPTrinket(unit)
+    if not UnitIsPlayer(unit) or not UnitIsEnemy("player", unit) then return end
+
+    local nameplate = C_NamePlate.GetNamePlateForUnit(unit)
+    if not nameplate then return end
+    local UnitFrame = nameplate.UnitFrame
+
+    if not UnitFrame then return end
+
+    if not UnitFrame.PvPTrinketFrame then
+        UnitFrame.PvPTrinketFrame = CreateFrame("Frame", nil, UnitFrame)
+        UnitFrame.PvPTrinketFrame:SetSize(22, 22)
+        UnitFrame.PvPTrinketFrame:SetPoint("LEFT", UnitFrame, "RIGHT", -2, 0)
+
+        UnitFrame.TrinketCooldownOverlay = CreateFrame("Cooldown", nil, UnitFrame.PvPTrinketFrame, "CooldownFrameTemplate")
+        UnitFrame.TrinketCooldownOverlay:SetAllPoints(UnitFrame.PvPTrinketFrame)
+
+        UnitFrame.TrinketCooldownText = UnitFrame.PvPTrinketFrame:CreateFontString(nil, "OVERLAY")
+        UnitFrame.TrinketCooldownText:SetFont("Fonts\\FRIZQT__.TTF", 12, "THICKOUTLINE")
+        UnitFrame.TrinketCooldownText:SetPoint("CENTER", UnitFrame.PvPTrinketFrame, "CENTER", 0, 0)
+        UnitFrame.TrinketCooldownText:SetTextColor(1, 1, 1, 1)
+        UnitFrame.TrinketCooldownText:Hide()
+    end
+
+    if not UnitFrame.PvPTrinketFrame.isSet then
+        local trinketTexture = UnitFrame.PvPTrinketFrame:CreateTexture(nil, "OVERLAY")
+        trinketTexture:SetAllPoints(UnitFrame.PvPTrinketFrame)
+        trinketTexture:SetTexture(1322720) 
+        UnitFrame.PvPTrinketFrame.isSet = true
     end
 
     UnitFrame.PvPTrinketFrame:Show()
 end
 
--- Function to hide the trinket and racial ability icons
-local function HidePvPTrinketAndRacialIcons(unit)
+-- Event handler for racial ability usage
+function OnSpellCastSuccess(event, spellID)
+    local duration = racialSpells[spellID]
+    local currTime = GetTime()
+
+    -- Check if it's a racial ability
+    if duration then
+        -- Update racial cooldown
+        local nameplate = C_NamePlate.GetNamePlateForUnit(unit)
+        if nameplate and nameplate.UnitFrame and nameplate.UnitFrame.RacialCooldownOverlay then
+            nameplate.UnitFrame.RacialCooldownOverlay:SetCooldown(currTime, duration)
+        end
+    elseif spellID == 336126 or spellID == 336135 then
+        -- Handle Gladiator's Medallion
+        local nameplate = C_NamePlate.GetNamePlateForUnit(unit)
+        if nameplate and nameplate.UnitFrame and nameplate.UnitFrame.TrinketCooldownOverlay then
+            nameplate.UnitFrame.TrinketCooldownOverlay:SetCooldown(currTime, 120) -- Gladiator trinket is 120 seconds
+        end
+    end
+end
+
+local function HidePvPTrinket(unit)
     local nameplate = C_NamePlate.GetNamePlateForUnit(unit)
-    if nameplate and nameplate.UnitFrame then
-        if nameplate.UnitFrame.PvPTrinketFrame then
-            nameplate.UnitFrame.PvPTrinketFrame:Hide()
-        end
-        if nameplate.UnitFrame.RacialIconFrame then
-            nameplate.UnitFrame.RacialIconFrame:Hide()
-        end
+    if nameplate and nameplate.UnitFrame and nameplate.UnitFrame.PvPTrinketFrame then
+        nameplate.UnitFrame.PvPTrinketFrame:Hide()
     end
 end
 
@@ -266,23 +377,46 @@ end
 
 function EpicPlates:NAME_PLATE_UNIT_ADDED(_, unit)
     local nameplate = C_NamePlate.GetNamePlateForUnit(unit)
-    if nameplate and nameplate.UnitFrame then
-        self:NiceNameplateInfo_Update(unit)
-        self:NiceNameplateFrames_Update(unit)
-        local texture = LSM:Fetch("statusbar", self.db.profile.healthBarTexture)
-        nameplate.UnitFrame.healthBar:SetStatusBarTexture(texture)
-        self:UpdateHealthBarWithPercent(unit)  
-		ShowPvPTrinketAndRacialIcons(unit)
+
+    if not nameplate or not nameplate.UnitFrame then
+        return 
     end
+
+    if UnitIsPlayer(unit) and UnitIsEnemy("player", unit) then
+        ShowPvPTrinket(unit)
+        ShowPvPRacial(unit)
+    else
+        HidePvPTrinket(unit)
+        HidePvPRacial(unit)
+    end
+end
+
+function EpicPlates:NAME_PLATE_UNIT_REMOVED(_, unit)
+    HidePvPTrinket(unit)
+    HidePvPRacial(unit)
 end
 
 function EpicPlates:NAME_PLATE_UNIT_REMOVED(_, unit)
     local nameplate = C_NamePlate.GetNamePlateForUnit(unit)
     if nameplate and nameplate.UnitFrame then
-        self:NiceNameplateInfo_Update(unit)
-        self:NiceNameplateFrames_Update(unit)
         self:UpdateHealthBarWithPercent(unit) 
-		ShowPvPTrinketAndRacialIcons(unit)
+		HidePvPTrinket(unit)
+		HidePvPRacial(unit)
+    end
+end
+
+-- Utility functions to hide trinket and racial icons
+local function HidePvPTrinket(unit)
+    local nameplate = C_NamePlate.GetNamePlateForUnit(unit)
+    if nameplate and nameplate.UnitFrame and nameplate.UnitFrame.PvPTrinketFrame then
+        nameplate.UnitFrame.PvPTrinketFrame:Hide()
+    end
+end
+
+local function HidePvPRacial(unit)
+    local nameplate = C_NamePlate.GetNamePlateForUnit(unit)
+    if nameplate and nameplate.UnitFrame and nameplate.UnitFrame.PvPRacialFrame then
+        nameplate.UnitFrame.PvPRacialFrame:Hide()
     end
 end
 
@@ -881,6 +1015,10 @@ function EpicPlates:UpdateAuras(unit)
                 if UnitFrame.buffIcons[i].stackCount then
                     UnitFrame.buffIcons[i].stackCount:Hide()
                 end
+                -- Ensure glow is removed, but only if updateFrame exists
+                if UnitFrame.buffIcons[i].updateFrame then
+                    ActionButton_HideOverlayGlow(UnitFrame.buffIcons[i].updateFrame)
+                end
             end
         end
         for i = 1, MAX_DEBUFFS do
@@ -889,6 +1027,10 @@ function EpicPlates:UpdateAuras(unit)
                 UnitFrame.debuffIcons[i].timer:Hide()
                 if UnitFrame.debuffIcons[i].stackCount then
                     UnitFrame.debuffIcons[i].stackCount:Hide()
+                end
+                -- Ensure glow is removed, but only if updateFrame exists
+                if UnitFrame.debuffIcons[i].updateFrame then
+                    ActionButton_HideOverlayGlow(UnitFrame.debuffIcons[i].updateFrame)
                 end
             end
         end
@@ -937,6 +1079,9 @@ function EpicPlates:UpdateAuras(unit)
             if UnitFrame.buffIcons[i].stackCount then
                 UnitFrame.buffIcons[i].stackCount:Hide()
             end
+            if UnitFrame.buffIcons[i].updateFrame then
+                ActionButton_HideOverlayGlow(UnitFrame.buffIcons[i].updateFrame)
+            end
         end
     end
     for i = debuffIndex, MAX_DEBUFFS do
@@ -945,6 +1090,9 @@ function EpicPlates:UpdateAuras(unit)
             UnitFrame.debuffIcons[i].timer:Hide()
             if UnitFrame.debuffIcons[i].stackCount then
                 UnitFrame.debuffIcons[i].stackCount:Hide()
+            end
+            if UnitFrame.debuffIcons[i].updateFrame then
+                ActionButton_HideOverlayGlow(UnitFrame.debuffIcons[i].updateFrame)
             end
         end
     end
@@ -988,81 +1136,77 @@ function EpicPlates:IsAuraFiltered(spellName, spellID, casterName, remainingTime
 end
 
 function EpicPlates:HandleAuraDisplay(iconTable, aura, currentTime, UnitFrame)
-    -- Ensure the icon is a valid texture
     local icon = iconTable.icon
     if not icon then
-        -- Create the icon texture if it doesn't exist
         icon = UnitFrame:CreateTexture(nil, "OVERLAY")
         icon:SetSize(self.db.profile.iconSize, self.db.profile.iconSize)
         iconTable.icon = icon
     end
 
-    -- Set the icon texture and make it visible
     icon:SetTexture(aura.icon)
     icon:Show()
 
-    -- Ensure the timer text is a valid font string
     local timer = iconTable.timer
     if not timer then
         timer = UnitFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         iconTable.timer = timer
     end
 
-    -- Position and show the timer
     timer:ClearAllPoints()
     timer:SetPoint("TOP", icon, "BOTTOM", 0, -2)
     timer:SetFont(LSM:Fetch("font", self.db.profile.timerFont), self.db.profile.timerFontSize, "OUTLINE")
     timer:Show()
 
-    icon:EnableMouse(true)
-
-    -- Display stack count on the icon if applicable
-    local stackCount = iconTable.stackCount
-    if aura.applications and aura.applications > 1 then
-        if not stackCount then
-            stackCount = UnitFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-            stackCount:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", -1, 1)
-            stackCount:SetFont(LSM:Fetch("font", self.db.profile.timerFont), self.db.profile.timerFontSize, "OUTLINE")
-            iconTable.stackCount = stackCount
-        end
-        stackCount:SetText(aura.applications)
-        stackCount:Show()
-    elseif stackCount then
-        stackCount:Hide()
+    if not iconTable.updateFrame then
+        iconTable.updateFrame = CreateFrame("Frame", nil, UnitFrame)
+        iconTable.updateFrame:SetAllPoints(icon) 
     end
 
-    -- Ensure the update frame is created
-    iconTable.updateFrame = iconTable.updateFrame or CreateFrame("Frame", nil, UnitFrame)
+    iconTable.updateFrame:SetScript("OnUpdate", nil)
 
-    -- Update the timer text dynamically
     iconTable.updateFrame:SetScript("OnUpdate", function(self, elapsed)
         local remainingTime = aura.expirationTime - GetTime()
+
         if remainingTime > 0 then
             timer:SetText(string.format("%.1f", remainingTime))
+
             if remainingTime > 5 then
-                timer:SetTextColor(0, 1, 0)  -- Green for > 5 seconds
-            elseif remainingTime > 2 then
-                timer:SetTextColor(1, 1, 0)  -- Yellow for 2-5 seconds
+                timer:SetTextColor(0, 1, 0)  
             else
-                timer:SetTextColor(1, 0, 0)  -- Red for < 2 seconds
+                timer:SetTextColor(1, 0, 0)  
+            end
+
+            if EpicPlates.db.profile.iconGlowEnabled and remainingTime <= 5 and not iconTable.updateFrame.glowApplied and icon:IsShown() then
+                ActionButton_ShowOverlayGlow(iconTable.updateFrame)
+                iconTable.updateFrame.glowApplied = true
+            end
+
+            if remainingTime <= 1 and iconTable.updateFrame.glowApplied then
+                ActionButton_HideOverlayGlow(iconTable.updateFrame)
+                iconTable.updateFrame.glowApplied = false
             end
         else
-            -- Hide everything when the aura expires
+            
             timer:Hide()
             icon:Hide()
-            if iconTable.stackCount then
-                iconTable.stackCount:Hide()  -- Hide the stack count if the aura expires
+            if iconTable.updateFrame.glowApplied then
+                ActionButton_HideOverlayGlow(iconTable.updateFrame)
+                iconTable.updateFrame.glowApplied = false
             end
+           
             self:SetScript("OnUpdate", nil)
         end
     end)
 
-    -- Tooltip handling
+    if not EpicPlates.db.profile.iconGlowEnabled and iconTable.updateFrame.glowApplied then
+        ActionButton_HideOverlayGlow(iconTable.updateFrame)
+        iconTable.updateFrame.glowApplied = false
+    end
+
     icon:SetScript("OnEnter", function(self)
         if aura and aura.index and aura.index > 0 then
             local filter = aura.isHarmful and "HARMFUL" or "HELPFUL"
             GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            GameTooltip:ClearLines()
             GameTooltip:SetUnitAura(UnitFrame.unit, aura.index, filter)
             GameTooltip:Show()
         else
@@ -1080,28 +1224,24 @@ function EpicPlates:OnCombatLogEventUnfiltered()
           destGUID, destName, destFlags, destRaidFlags, spellId, spellName, spellSchool, auraType = CombatLogGetCurrentEventInfo()
 
     if eventType == "SPELL_CAST_SUCCESS" then
-        local unit = self:GetUnitByGUID(sourceGUID) 
+        local unit = self:GetUnitByGUID(sourceGUID)
 
         if unit and UnitIsPlayer(unit) and UnitIsEnemy("player", unit) then
             local nameplate = C_NamePlate.GetNamePlateForUnit(unit)
 
             if nameplate and nameplate.UnitFrame then
-                if nameplate.UnitFrame.TrinketCooldownOverlay then
-                    if spellId == gladiatorMedallionSpellID then
-                        print("Enemy Gladiator's Medallion used!")
-                        nameplate.UnitFrame.TrinketCooldownOverlay:SetCooldown(GetTime(), trinketCooldown)
-                    elseif spellId == adaptationSpellID then
-                        print("Enemy Adaptation triggered!")
-                        nameplate.UnitFrame.TrinketCooldownOverlay:SetCooldown(GetTime(), trinketCooldown)
-                    end
-                end
-
-                local racialAbility = GetRacialAbility(unit)
-                if racialAbility and spellId == racialAbility.spellID then
-                    print("Enemy racial ability used: " .. spellId)
-                    if nameplate.UnitFrame.RacialCooldownOverlay then
-                        nameplate.UnitFrame.RacialCooldownOverlay:SetCooldown(GetTime(), racialAbility.cooldown)
-                    end
+                -- Handle Gladiator's Medallion and Adaptation
+                if spellId == gladiatorMedallionSpellID or spellId == adaptationSpellID then
+                    local cooldownDuration = trinketCooldown
+                    local endTime = GetTime() + cooldownDuration
+                    nameplate.UnitFrame.TrinketCooldownOverlay:SetCooldown(GetTime(), cooldownDuration)
+                    UpdateCooldownText(nameplate.UnitFrame, nameplate.UnitFrame.TrinketCooldownText, endTime)
+                elseif racialAbilities[spellId] then
+                    -- Handle racials
+                    local cooldownDuration = 90 
+                    local endTime = GetTime() + cooldownDuration
+                    nameplate.UnitFrame.RacialCooldownOverlay:SetCooldown(GetTime(), cooldownDuration)
+                    UpdateCooldownText(nameplate.UnitFrame, nameplate.UnitFrame.RacialCooldownText, endTime)
                 end
             end
         end
